@@ -96,6 +96,8 @@ from .const import (
     CONF_BRIGHTNESS_MODE,
     CONF_BRIGHTNESS_MODE_TIME_DARK,
     CONF_BRIGHTNESS_MODE_TIME_LIGHT,
+    CONF_COLOR_TEMP_MODE,
+    CONF_HORIZON_COLOR_TEMP,
     CONF_DETECT_NON_HA_CHANGES,
     CONF_INCLUDE_CONFIG_IN_ATTRIBUTES,
     CONF_INITIAL_TRANSITION,
@@ -946,6 +948,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         self._expand_light_groups()  # updates manual control timers
         location, _ = get_astral_location(self.hass)
 
+        color_temp_mode_value = data[CONF_COLOR_TEMP_MODE]
         self._sun_light_settings = SunLightSettings(
             name=self._name,
             astral_location=location,
@@ -969,6 +972,16 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             brightness_mode=data[CONF_BRIGHTNESS_MODE],
             brightness_mode_time_dark=data[CONF_BRIGHTNESS_MODE_TIME_DARK],
             brightness_mode_time_light=data[CONF_BRIGHTNESS_MODE_TIME_LIGHT],
+            color_temp_mode=(
+                color_temp_mode_value
+                if isinstance(color_temp_mode_value, str)
+                else color_temp_mode_value["type"]
+            ),
+            horizon_color_temp=(
+                color_temp_mode_value.get(CONF_HORIZON_COLOR_TEMP)
+                if isinstance(color_temp_mode_value, dict)
+                else None
+            ),
             timezone=zoneinfo.ZoneInfo(self.hass.config.time_zone),
         )
         _LOGGER.debug(
