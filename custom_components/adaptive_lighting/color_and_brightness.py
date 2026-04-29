@@ -350,34 +350,51 @@ class SunLightSettings:
         today_sunrise = self.sun.sunrise(today)
 
         if dt_value < today_sunrise:
-            # We're between midnight and today's sunrise. Determine which night we
-            # belong to by comparing to the midpoint between yesterday's sunset and
-            # today's sunrise. Before the midpoint = still in last night; after = tonight.
+            # We're between midnight and today's sunrise.
             yesterday = today - datetime.timedelta(days=1)
             yesterday_sunset = self.sun.sunset(yesterday)
-            midpoint = yesterday_sunset + (today_sunrise - yesterday_sunset) / 2
-            if dt_value < midpoint:
-                # Still in last night — return yesterday's sunset → today's sunrise.
+
+            # Try to get today's civil dawn; if unavailable fall back to sunrise.
+            try:
+                today_dawn = location.dawn(today)
+            except ValueError:
+                today_dawn = today_sunrise
+
+            if dt_value >= today_dawn:
+                # We're in the civil-dawn → sunrise ramp — still last night.
                 sunset = yesterday_sunset
                 next_day = today
                 try:
                     dusk = location.dusk(yesterday)
-                    dawn = location.dawn(next_day)
                 except ValueError:
                     dusk = sunset
-                    dawn = today_sunrise
+                dawn = today_dawn
                 sunrise = today_sunrise
             else:
-                # Past midnight midpoint — return tonight.
-                sunset = today_sunset
-                next_day = today + datetime.timedelta(days=1)
-                try:
-                    dusk = location.dusk(today)
-                    dawn = location.dawn(next_day)
-                except ValueError:
-                    dusk = sunset
-                    dawn = self.sun.sunrise(next_day)
-                sunrise = self.sun.sunrise(next_day)
+                # Before civil dawn — use midpoint to distinguish last night from tonight.
+                midpoint = yesterday_sunset + (today_sunrise - yesterday_sunset) / 2
+                if dt_value < midpoint:
+                    # Still in last night — return yesterday's sunset → today's sunrise.
+                    sunset = yesterday_sunset
+                    next_day = today
+                    try:
+                        dusk = location.dusk(yesterday)
+                        dawn = location.dawn(next_day)
+                    except ValueError:
+                        dusk = sunset
+                        dawn = today_sunrise
+                    sunrise = today_sunrise
+                else:
+                    # Past midnight midpoint — return tonight.
+                    sunset = today_sunset
+                    next_day = today + datetime.timedelta(days=1)
+                    try:
+                        dusk = location.dusk(today)
+                        dawn = location.dawn(next_day)
+                    except ValueError:
+                        dusk = sunset
+                        dawn = self.sun.sunrise(next_day)
+                    sunrise = self.sun.sunrise(next_day)
         elif dt_value < today_sunset:
             # We're still before sunset today. The "night surrounding dt_value"
             # is tonight (today_sunset → tomorrow's sunrise).
@@ -440,8 +457,34 @@ class SunLightSettings:
         sun_position: float,
         dt: datetime.datetime,
     ) -> int:
-        """Dusk-ramp branch — implemented in Task 5."""
-        raise NotImplementedError
+        """Color-temp ramp: horizon at sunrise/sunset → min at civil dusk/dawn."""
+        # adapt_until_sleep is intentionally ignored in dusk_ramp mode (per spec).
+        horizon = self.horizon_color_temp
+        if horizon is None:
+            msg = "horizon_color_temp must be set when color_temp_mode == 'dusk_ramp'"
+            raise ValueError(msg)
+
+        if sun_position >= 0:
+            # Daytime (and horizon crossing): parabolic from horizon (at sunrise/sunset)
+            # to max (at noon). At sun_position=0, returns horizon exactly.
+            delta = self.max_color_temp - horizon
+            ct = (delta * sun_position) + horizon
+            return 5 * round(ct / 5)
+
+        sunset_ts, dusk_ts, dawn_ts, sunrise_ts = self._twilight_anchors(dt)
+        now_ts = dt.timestamp()
+
+        if sunset_ts <= now_ts < dusk_ts:
+            t = (now_ts - sunset_ts) / (dusk_ts - sunset_ts)
+            ct = horizon + (self.min_color_temp - horizon) * t
+            return 5 * round(ct / 5)
+
+        if dawn_ts <= now_ts < sunrise_ts:
+            t = (now_ts - dawn_ts) / (sunrise_ts - dawn_ts)
+            ct = self.min_color_temp + (horizon - self.min_color_temp) * t
+            return 5 * round(ct / 5)
+
+        return self.min_color_temp
 
     def brightness_and_color(
         self,

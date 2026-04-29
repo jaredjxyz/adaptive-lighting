@@ -387,3 +387,84 @@ class TestTwilightAnchors:
         sunset_ts, _, _, sunrise_ts = s._twilight_anchors(late)
         # The relevant sunset was on 2026-06-01; sunrise on 2026-06-02.
         assert sunset_ts < late.timestamp() < sunrise_ts
+
+
+class TestColorTempKelvinDuskRamp:
+    """Verify the dusk-ramp curve at every named anchor."""
+
+    def _settings(self):
+        return _make_settings(
+            color_temp_mode="dusk_ramp",
+            min_color_temp=2200,
+            max_color_temp=6500,
+            horizon_color_temp=2700,
+        )
+
+    def test_solar_noon_returns_max(self):
+        s = self._settings()
+        # sun_position=1 ⇒ max_color_temp regardless of dt
+        any_dt = dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)
+        assert s.color_temp_kelvin(1.0, any_dt) == 6500
+
+    def test_daytime_interpolation_uses_horizon_as_floor(self):
+        s = self._settings()
+        any_dt = dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)
+        # sun_position=0 ⇒ horizon_color_temp (not min_color_temp)
+        assert s.color_temp_kelvin(0.0, any_dt) == 2700
+        # halfway: (6500-2700)*0.5 + 2700 = 4600
+        expected = 5 * round(((6500 - 2700) * 0.5 + 2700) / 5)
+        assert s.color_temp_kelvin(0.5, any_dt) == expected
+
+    def test_at_sunset_returns_horizon(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 1, 23, 0, tzinfo=dt.UTC)
+        sunset_ts, _, _, _ = s._twilight_anchors(sample)
+        at_sunset = dt.datetime.fromtimestamp(sunset_ts, dt.UTC)
+        # sun_position is 0 at sunset; piecewise picks horizon_color_temp.
+        assert s.color_temp_kelvin(0.0, at_sunset) == 2700
+
+    def test_midway_sunset_to_dusk_returns_midpoint(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 1, 23, 0, tzinfo=dt.UTC)
+        sunset_ts, dusk_ts, _, _ = s._twilight_anchors(sample)
+        midway_ts = (sunset_ts + dusk_ts) / 2
+        midway = dt.datetime.fromtimestamp(midway_ts, dt.UTC)
+        # halfway between 2700 and 2200 = 2450
+        expected = 5 * round((2700 + 2200) / 2 / 5)
+        assert s.color_temp_kelvin(-0.5, midway) == expected
+
+    def test_at_civil_dusk_returns_min(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 1, 23, 0, tzinfo=dt.UTC)
+        _, dusk_ts, _, _ = s._twilight_anchors(sample)
+        # Exact civil dusk: ramp window is [sunset, dusk), so at dusk we fall
+        # through to deep-night min.
+        at_dusk_exact = dt.datetime.fromtimestamp(dusk_ts, dt.UTC)
+        assert s.color_temp_kelvin(-0.7, at_dusk_exact) == 2200
+        # And just past dusk:
+        at_dusk_after = dt.datetime.fromtimestamp(dusk_ts + 1, dt.UTC)
+        assert s.color_temp_kelvin(-0.7, at_dusk_after) == 2200
+
+    def test_deep_night_returns_min(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 2, 6, 0, tzinfo=dt.UTC)
+        _, dusk_ts, dawn_ts, _ = s._twilight_anchors(sample)
+        deep_night_ts = (dusk_ts + dawn_ts) / 2
+        deep_night = dt.datetime.fromtimestamp(deep_night_ts, dt.UTC)
+        assert s.color_temp_kelvin(-1.0, deep_night) == 2200
+
+    def test_midway_dawn_to_sunrise_returns_midpoint(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 2, 6, 0, tzinfo=dt.UTC)
+        _, _, dawn_ts, sunrise_ts = s._twilight_anchors(sample)
+        midway_ts = (dawn_ts + sunrise_ts) / 2
+        midway = dt.datetime.fromtimestamp(midway_ts, dt.UTC)
+        expected = 5 * round((2200 + 2700) / 2 / 5)
+        assert s.color_temp_kelvin(-0.5, midway) == expected
+
+    def test_at_sunrise_returns_horizon(self):
+        s = self._settings()
+        sample = dt.datetime(2026, 6, 2, 6, 0, tzinfo=dt.UTC)
+        _, _, _, sunrise_ts = s._twilight_anchors(sample)
+        at_sunrise = dt.datetime.fromtimestamp(sunrise_ts, dt.UTC)
+        assert s.color_temp_kelvin(0.0, at_sunrise) == 2700
