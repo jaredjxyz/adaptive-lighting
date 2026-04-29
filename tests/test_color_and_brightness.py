@@ -14,6 +14,7 @@ from custom_components.adaptive_lighting.const import (
 from homeassistant.components.adaptive_lighting.color_and_brightness import (
     SunEvent,
     SunEvents,
+    SunLightSettings,
 )
 
 # Create a mock astral_location object
@@ -41,6 +42,43 @@ def tzinfo_and_location(request):
         ),
     )
     return tzinfo, location
+
+
+def _make_settings(**overrides):
+    """Build a SunLightSettings with defaults plus overrides."""
+    location = Location(
+        LocationInfo(
+            name="test",
+            region="region",
+            timezone="UTC",
+            latitude=37.0,
+            longitude=-122.0,
+        )
+    )
+    base = dict(
+        name="test",
+        astral_location=location,
+        adapt_until_sleep=False,
+        max_brightness=100,
+        max_color_temp=6500,
+        min_brightness=1,
+        min_color_temp=2200,
+        sleep_brightness=1,
+        sleep_rgb_or_color_temp="color_temp",
+        sleep_color_temp=1000,
+        sleep_rgb_color=(255, 0, 0),
+        sunrise_time=None,
+        min_sunrise_time=None,
+        max_sunrise_time=None,
+        sunset_time=None,
+        min_sunset_time=None,
+        max_sunset_time=None,
+        brightness_mode_time_dark=dt.timedelta(),
+        brightness_mode_time_light=dt.timedelta(),
+        timezone=zoneinfo.ZoneInfo("UTC"),
+    )
+    base.update(overrides)
+    return SunLightSettings(**base)
 
 
 def test_replace_time(tzinfo_and_location):
@@ -276,3 +314,15 @@ class TestDomainSchemaColorTempMode:
         result = _DOMAIN_SCHEMA(cfg)
         assert result["color_temp_mode"]["type"] == "dusk_ramp"
         assert result["color_temp_mode"]["horizon_color_temp"] == 2700
+
+
+class TestSunLightSettingsColorTempFields:
+    def test_default_color_temp_mode(self):
+        s = _make_settings()
+        assert s.color_temp_mode == "default"
+        assert s.horizon_color_temp is None
+
+    def test_dusk_ramp_fields(self):
+        s = _make_settings(color_temp_mode="dusk_ramp", horizon_color_temp=2700)
+        assert s.color_temp_mode == "dusk_ramp"
+        assert s.horizon_color_temp == 2700

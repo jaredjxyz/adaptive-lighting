@@ -227,6 +227,8 @@ class SunLightSettings:
     brightness_mode_time_dark: datetime.timedelta
     brightness_mode_time_light: datetime.timedelta
     brightness_mode: Literal["default", "linear", "tanh"] = "default"
+    color_temp_mode: Literal["default", "dusk_ramp"] = "default"
+    horizon_color_temp: int | None = None
     sunrise_offset: datetime.timedelta = datetime.timedelta()
     sunset_offset: datetime.timedelta = datetime.timedelta()
     timezone: datetime.tzinfo = UTC
