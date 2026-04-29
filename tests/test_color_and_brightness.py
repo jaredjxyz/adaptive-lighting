@@ -326,3 +326,31 @@ class TestSunLightSettingsColorTempFields:
         s = _make_settings(color_temp_mode="dusk_ramp", horizon_color_temp=2700)
         assert s.color_temp_mode == "dusk_ramp"
         assert s.horizon_color_temp == 2700
+
+
+class TestColorTempKelvinDefaultUnchanged:
+    """Pin upstream behavior: with default mode, color_temp_kelvin returns
+    the same values it always has. dt is now passed but unused in default mode."""
+
+    def test_daytime_interpolation(self):
+        s = _make_settings(min_color_temp=2200, max_color_temp=6500)
+        # sun_position=1 → max
+        assert s.color_temp_kelvin(1.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 6500
+        # sun_position=0 → min
+        assert s.color_temp_kelvin(0.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 2200
+        # sun_position=0.5 → midpoint
+        midpoint = 5 * round(((6500 - 2200) * 0.5 + 2200) / 5)
+        assert s.color_temp_kelvin(0.5, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == midpoint
+
+    def test_night_returns_min_when_not_adapt_until_sleep(self):
+        s = _make_settings(min_color_temp=2200, adapt_until_sleep=False)
+        assert s.color_temp_kelvin(-0.5, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 2200
+
+    def test_night_interpolates_to_sleep_when_adapt_until_sleep(self):
+        s = _make_settings(
+            min_color_temp=2200, sleep_color_temp=1000, adapt_until_sleep=True
+        )
+        # sun_position=-1 → sleep_color_temp
+        assert s.color_temp_kelvin(-1.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 1000
+        # sun_position=0 → min_color_temp
+        assert s.color_temp_kelvin(0.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 2200

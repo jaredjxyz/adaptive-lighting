@@ -327,20 +327,38 @@ class SunLightSettings:
             return self._brightness_pct_tanh(dt)
         return None
 
-    def color_temp_kelvin(self, sun_position: float) -> int:
-        """Calculate the color temperature in Kelvin."""
+    def color_temp_kelvin(
+        self,
+        sun_position: float,
+        dt: datetime.datetime,
+    ) -> int:
+        """Calculate color temperature in Kelvin at time `dt`."""
+        if self.color_temp_mode == "dusk_ramp":
+            return self._color_temp_kelvin_dusk_ramp(sun_position, dt)
+        return self._color_temp_kelvin_default(sun_position)
+
+    def _color_temp_kelvin_default(self, sun_position: float) -> int:
+        """Upstream color-temp formula, extracted unchanged."""
         if sun_position > 0:
             delta = self.max_color_temp - self.min_color_temp
             ct = (delta * sun_position) + self.min_color_temp
-            return 5 * round(ct / 5)  # round to nearest 5
+            return 5 * round(ct / 5)
         if sun_position == 0 or not self.adapt_until_sleep:
             return self.min_color_temp
         if self.adapt_until_sleep and sun_position < 0:
             delta = abs(self.min_color_temp - self.sleep_color_temp)
             ct = (delta * abs(1 + sun_position)) + self.sleep_color_temp
-            return 5 * round(ct / 5)  # round to nearest 5
+            return 5 * round(ct / 5)
         msg = "Should not happen"
         raise ValueError(msg)
+
+    def _color_temp_kelvin_dusk_ramp(
+        self,
+        sun_position: float,
+        dt: datetime.datetime,
+    ) -> int:
+        """Dusk-ramp branch — implemented in Task 5."""
+        raise NotImplementedError
 
     def brightness_and_color(
         self,
@@ -371,10 +389,10 @@ class SunLightSettings:
                 self.sleep_rgb_color,
                 sun_position,
             )
-            color_temp_kelvin = self.color_temp_kelvin(sun_position)
+            color_temp_kelvin = self.color_temp_kelvin(sun_position, dt)
             force_rgb_color = True
         else:
-            color_temp_kelvin = self.color_temp_kelvin(sun_position)
+            color_temp_kelvin = self.color_temp_kelvin(sun_position, dt)
             r, g, b = color_temperature_to_rgb(color_temp_kelvin)
             rgb_color = (round(r), round(g), round(b))
         # backwards compatibility for versions < 1.3.1 - see #403
