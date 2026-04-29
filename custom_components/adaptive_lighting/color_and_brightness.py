@@ -227,6 +227,8 @@ class SunLightSettings:
     brightness_mode_time_dark: datetime.timedelta
     brightness_mode_time_light: datetime.timedelta
     brightness_mode: Literal["default", "linear", "tanh"] = "default"
+    color_temp_mode: Literal["default", "dusk_ramp"] = "default"
+    horizon_color_temp: int | None = None
     sunrise_offset: datetime.timedelta = datetime.timedelta()
     sunset_offset: datetime.timedelta = datetime.timedelta()
     timezone: datetime.tzinfo = UTC
@@ -325,20 +327,164 @@ class SunLightSettings:
             return self._brightness_pct_tanh(dt)
         return None
 
-    def color_temp_kelvin(self, sun_position: float) -> int:
-        """Calculate the color temperature in Kelvin."""
+    def _twilight_anchors(
+        self,
+        dt_value: datetime.datetime,
+    ) -> tuple[float, float, float, float]:
+        """Return (sunset_ts, civil_dusk_ts, civil_dawn_ts, sunrise_ts) for the
+        night surrounding `dt_value`.
+
+        Three branches attribute `dt_value` to the correct night:
+        1. Pre-sunrise (`dt_value < today_sunrise`): split by the midpoint between
+           yesterday's sunset and today's sunrise (~solar midnight). Before that
+           midpoint → still in last night (yesterday_sunset → today_sunrise).
+           After it → the upcoming night (today_sunset → tomorrow's sunrise).
+        2. Daytime (`today_sunrise <= dt_value < today_sunset`): the upcoming
+           night (today_sunset → tomorrow's sunrise).
+        3. Post-sunset (`dt_value >= today_sunset`): the same night
+           (today_sunset → tomorrow's sunrise).
+        """
+        location = self.astral_location
+        today = dt_value.date()
+        today_sunset = self.sun.sunset(today)
+        today_sunrise = self.sun.sunrise(today)
+
+        if dt_value < today_sunrise:
+            # We're between midnight and today's sunrise.
+            yesterday = today - datetime.timedelta(days=1)
+            yesterday_sunset = self.sun.sunset(yesterday)
+
+            # Try to get today's civil dawn; if unavailable fall back to sunrise.
+            try:
+                today_dawn = location.dawn(today)
+            except ValueError:
+                today_dawn = today_sunrise
+
+            if dt_value >= today_dawn:
+                # We're in the civil-dawn → sunrise ramp — still last night.
+                sunset = yesterday_sunset
+                next_day = today
+                try:
+                    dusk = location.dusk(yesterday)
+                except ValueError:
+                    dusk = sunset
+                dawn = today_dawn
+                sunrise = today_sunrise
+            else:
+                # Before civil dawn — use midpoint to distinguish last night from tonight.
+                midpoint = yesterday_sunset + (today_sunrise - yesterday_sunset) / 2
+                if dt_value < midpoint:
+                    # Still in last night — return yesterday's sunset → today's sunrise.
+                    sunset = yesterday_sunset
+                    next_day = today
+                    try:
+                        dusk = location.dusk(yesterday)
+                        dawn = location.dawn(next_day)
+                    except ValueError:
+                        dusk = sunset
+                        dawn = today_sunrise
+                    sunrise = today_sunrise
+                else:
+                    # Past midnight midpoint — return tonight.
+                    sunset = today_sunset
+                    next_day = today + datetime.timedelta(days=1)
+                    try:
+                        dusk = location.dusk(today)
+                        dawn = location.dawn(next_day)
+                    except ValueError:
+                        dusk = sunset
+                        dawn = self.sun.sunrise(next_day)
+                    sunrise = self.sun.sunrise(next_day)
+        elif dt_value < today_sunset:
+            # We're still before sunset today. The "night surrounding dt_value"
+            # is tonight (today_sunset → tomorrow's sunrise).
+            sunset = today_sunset
+            next_day = today + datetime.timedelta(days=1)
+            try:
+                dusk = location.dusk(today)
+                dawn = location.dawn(next_day)
+            except ValueError:
+                # No civil twilight at this latitude/date.
+                dusk = sunset
+                dawn = self.sun.sunrise(next_day)
+            sunrise = self.sun.sunrise(next_day)
+        else:
+            # We're at or past today's sunset. Same night extends to tomorrow's sunrise.
+            sunset = today_sunset
+            next_day = today + datetime.timedelta(days=1)
+            try:
+                dusk = location.dusk(today)
+                dawn = location.dawn(next_day)
+            except ValueError:
+                dusk = sunset
+                dawn = self.sun.sunrise(next_day)
+            sunrise = self.sun.sunrise(next_day)
+
+        return (
+            sunset.timestamp(),
+            dusk.timestamp(),
+            dawn.timestamp(),
+            sunrise.timestamp(),
+        )
+
+    def color_temp_kelvin(
+        self,
+        sun_position: float,
+        dt: datetime.datetime,
+    ) -> int:
+        """Calculate color temperature in Kelvin at time `dt`."""
+        if self.color_temp_mode == "dusk_ramp":
+            return self._color_temp_kelvin_dusk_ramp(sun_position, dt)
+        return self._color_temp_kelvin_default(sun_position)
+
+    def _color_temp_kelvin_default(self, sun_position: float) -> int:
+        """Upstream color-temp formula, extracted unchanged."""
         if sun_position > 0:
             delta = self.max_color_temp - self.min_color_temp
             ct = (delta * sun_position) + self.min_color_temp
-            return 5 * round(ct / 5)  # round to nearest 5
+            return 5 * round(ct / 5)
         if sun_position == 0 or not self.adapt_until_sleep:
             return self.min_color_temp
         if self.adapt_until_sleep and sun_position < 0:
             delta = abs(self.min_color_temp - self.sleep_color_temp)
             ct = (delta * abs(1 + sun_position)) + self.sleep_color_temp
-            return 5 * round(ct / 5)  # round to nearest 5
+            return 5 * round(ct / 5)
         msg = "Should not happen"
         raise ValueError(msg)
+
+    def _color_temp_kelvin_dusk_ramp(
+        self,
+        sun_position: float,
+        dt: datetime.datetime,
+    ) -> int:
+        """Color-temp ramp: horizon at sunrise/sunset → min at civil dusk/dawn."""
+        # adapt_until_sleep is intentionally ignored in dusk_ramp mode (per spec).
+        horizon = self.horizon_color_temp
+        if horizon is None:
+            msg = "horizon_color_temp must be set when color_temp_mode == 'dusk_ramp'"
+            raise ValueError(msg)
+
+        if sun_position >= 0:
+            # Daytime (and horizon crossing): parabolic from horizon (at sunrise/sunset)
+            # to max (at noon). At sun_position=0, returns horizon exactly.
+            delta = self.max_color_temp - horizon
+            ct = (delta * sun_position) + horizon
+            return 5 * round(ct / 5)
+
+        sunset_ts, dusk_ts, dawn_ts, sunrise_ts = self._twilight_anchors(dt)
+        now_ts = dt.timestamp()
+
+        if sunset_ts <= now_ts < dusk_ts:
+            t = (now_ts - sunset_ts) / (dusk_ts - sunset_ts)
+            ct = horizon + (self.min_color_temp - horizon) * t
+            return 5 * round(ct / 5)
+
+        if dawn_ts <= now_ts < sunrise_ts:
+            t = (now_ts - dawn_ts) / (sunrise_ts - dawn_ts)
+            ct = self.min_color_temp + (horizon - self.min_color_temp) * t
+            return 5 * round(ct / 5)
+
+        return self.min_color_temp
 
     def brightness_and_color(
         self,
@@ -369,10 +515,10 @@ class SunLightSettings:
                 self.sleep_rgb_color,
                 sun_position,
             )
-            color_temp_kelvin = self.color_temp_kelvin(sun_position)
+            color_temp_kelvin = self.color_temp_kelvin(sun_position, dt)
             force_rgb_color = True
         else:
-            color_temp_kelvin = self.color_temp_kelvin(sun_position)
+            color_temp_kelvin = self.color_temp_kelvin(sun_position, dt)
             r, g, b = color_temperature_to_rgb(color_temp_kelvin)
             rgb_color = (round(r), round(g), round(b))
         # backwards compatibility for versions < 1.3.1 - see #403
