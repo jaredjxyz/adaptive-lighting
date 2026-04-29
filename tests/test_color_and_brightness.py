@@ -2,8 +2,15 @@ import datetime as dt
 import zoneinfo
 
 import pytest
+import voluptuous as vol
 from astral import LocationInfo
 from astral.location import Location
+from custom_components.adaptive_lighting.const import (
+    COLOR_TEMP_MODE_DEFAULT,
+    COLOR_TEMP_MODE_DUSK_RAMP,
+    COLOR_TEMP_MODE_SCHEMA,
+    _DOMAIN_SCHEMA,
+)
 from homeassistant.components.adaptive_lighting.color_and_brightness import (
     SunEvent,
     SunEvents,
@@ -207,3 +214,65 @@ def test_closest_event(tzinfo_and_location):
     event_name, ts = sun_events.closest_event(sunrise)
     assert event_name == SunEvent.SUNRISE
     assert ts == location.sunrise(sunrise.date()).timestamp()
+
+
+class TestColorTempModeSchema:
+    def test_accepts_string_default(self):
+        assert COLOR_TEMP_MODE_SCHEMA("default") == "default"
+
+    def test_accepts_dict_default(self):
+        assert COLOR_TEMP_MODE_SCHEMA({"type": "default"}) == {"type": "default"}
+
+    def test_accepts_dusk_ramp_with_horizon(self):
+        result = COLOR_TEMP_MODE_SCHEMA(
+            {"type": "dusk_ramp", "horizon_color_temp": 2700}
+        )
+        assert result == {"type": "dusk_ramp", "horizon_color_temp": 2700}
+
+    def test_rejects_dusk_ramp_without_horizon(self):
+        with pytest.raises(vol.Invalid):
+            COLOR_TEMP_MODE_SCHEMA({"type": "dusk_ramp"})
+
+    def test_rejects_horizon_outside_dusk_ramp(self):
+        with pytest.raises(vol.Invalid):
+            COLOR_TEMP_MODE_SCHEMA(
+                {"type": "default", "horizon_color_temp": 2700}
+            )
+
+    def test_rejects_horizon_below_range(self):
+        with pytest.raises(vol.Invalid):
+            COLOR_TEMP_MODE_SCHEMA(
+                {"type": "dusk_ramp", "horizon_color_temp": 999}
+            )
+
+    def test_rejects_horizon_above_range(self):
+        with pytest.raises(vol.Invalid):
+            COLOR_TEMP_MODE_SCHEMA(
+                {"type": "dusk_ramp", "horizon_color_temp": 10001}
+            )
+
+    def test_rejects_unknown_mode(self):
+        with pytest.raises(vol.Invalid):
+            COLOR_TEMP_MODE_SCHEMA({"type": "rainbow"})
+
+
+class TestDomainSchemaColorTempMode:
+    def _base(self):
+        return {
+            "name": "x",
+            "lights": [],
+        }
+
+    def test_no_mode_set_defaults_to_default_string(self):
+        cfg = _DOMAIN_SCHEMA(self._base())
+        assert cfg["color_temp_mode"] == "default"
+
+    def test_dusk_ramp_passes_through(self):
+        cfg = self._base()
+        cfg["color_temp_mode"] = {
+            "type": "dusk_ramp",
+            "horizon_color_temp": 2700,
+        }
+        result = _DOMAIN_SCHEMA(cfg)
+        assert result["color_temp_mode"]["type"] == "dusk_ramp"
+        assert result["color_temp_mode"]["horizon_color_temp"] == 2700

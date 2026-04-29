@@ -196,6 +196,35 @@ DOCS[CONF_BRIGHTNESS_MODE_TIME_LIGHT] = (
     "the brightness after/before sunrise/sunset. 📈📉."
 )
 
+CONF_COLOR_TEMP_MODE = "color_temp_mode"
+COLOR_TEMP_MODE_DEFAULT = "default"
+COLOR_TEMP_MODE_DUSK_RAMP = "dusk_ramp"
+DEFAULT_COLOR_TEMP_MODE = COLOR_TEMP_MODE_DEFAULT
+DOCS[CONF_COLOR_TEMP_MODE] = (
+    "How color temperature is calculated outside of daytime. "
+    "`default` reproduces upstream behavior. "
+    "`dusk_ramp` linearly ramps from `horizon_color_temp` (at sunrise/sunset) "
+    "to `min_color_temp` (at civil dawn/dusk)."
+)
+
+CONF_HORIZON_COLOR_TEMP = "horizon_color_temp"
+DOCS[CONF_HORIZON_COLOR_TEMP] = (
+    "Color temperature in Kelvin at sunrise and sunset (only valid in `dusk_ramp` mode)."
+)
+
+COLOR_TEMP_MODE_SCHEMA = vol.Any(
+    COLOR_TEMP_MODE_DEFAULT,
+    vol.Schema({vol.Required("type"): COLOR_TEMP_MODE_DEFAULT}),
+    vol.Schema(
+        {
+            vol.Required("type"): COLOR_TEMP_MODE_DUSK_RAMP,
+            vol.Required(CONF_HORIZON_COLOR_TEMP): vol.All(
+                int, vol.Range(min=1000, max=10000)
+            ),
+        },
+    ),
+)
+
 CONF_TAKE_OVER_CONTROL, DEFAULT_TAKE_OVER_CONTROL = "take_over_control", True
 DOCS[CONF_TAKE_OVER_CONTROL] = (
     "Pause adaptation of individual lights and hand over (manual) control to other sources that "
@@ -371,6 +400,7 @@ VALIDATION_TUPLES: list[tuple[str, Any, Any]] = [
     ),
     (CONF_BRIGHTNESS_MODE_TIME_DARK, DEFAULT_BRIGHTNESS_MODE_TIME_DARK, int),
     (CONF_BRIGHTNESS_MODE_TIME_LIGHT, DEFAULT_BRIGHTNESS_MODE_TIME_LIGHT, int),
+    (CONF_COLOR_TEMP_MODE, DEFAULT_COLOR_TEMP_MODE, COLOR_TEMP_MODE_SCHEMA),
     (CONF_TAKE_OVER_CONTROL, DEFAULT_TAKE_OVER_CONTROL, bool),
     (
         CONF_TAKE_OVER_CONTROL_MODE,
