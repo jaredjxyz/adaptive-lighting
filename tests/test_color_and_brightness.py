@@ -354,3 +354,36 @@ class TestColorTempKelvinDefaultUnchanged:
         assert s.color_temp_kelvin(-1.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 1000
         # sun_position=0 → min_color_temp
         assert s.color_temp_kelvin(0.0, dt.datetime(2026, 6, 1, 12, tzinfo=dt.UTC)) == 2200
+
+
+class TestTwilightAnchors:
+    def test_returns_four_timestamps_in_order(self):
+        s = _make_settings()
+        # Pick a date when civil dusk/dawn definitely occur at 37°N.
+        sample = dt.datetime(2026, 6, 1, 23, 0, tzinfo=dt.UTC)
+        sunset_ts, dusk_ts, dawn_ts, sunrise_ts = s._twilight_anchors(sample)
+        assert sunset_ts < dusk_ts < dawn_ts < sunrise_ts
+
+    def test_civil_dusk_is_about_30min_after_sunset_in_summer(self):
+        s = _make_settings()
+        sample = dt.datetime(2026, 6, 1, 23, 0, tzinfo=dt.UTC)
+        sunset_ts, dusk_ts, _, _ = s._twilight_anchors(sample)
+        # At 37°N in June, civil twilight ≈ 28-32 min after sunset.
+        delta_min = (dusk_ts - sunset_ts) / 60
+        assert 20 < delta_min < 45
+
+    def test_picks_correct_night_when_called_before_sunset(self):
+        """At 10am UTC, anchors should describe the upcoming night, not last night."""
+        s = _make_settings()
+        morning = dt.datetime(2026, 6, 1, 10, 0, tzinfo=dt.UTC)
+        sunset_ts, dusk_ts, dawn_ts, sunrise_ts = s._twilight_anchors(morning)
+        # All anchors should be in the future relative to `morning`.
+        assert sunset_ts > morning.timestamp()
+
+    def test_picks_correct_night_when_called_after_midnight(self):
+        """At 04:00 UTC after a sunset, anchors should still describe the night surrounding that sunset."""
+        s = _make_settings()
+        late = dt.datetime(2026, 6, 2, 4, 0, tzinfo=dt.UTC)  # well after midnight UTC
+        sunset_ts, _, _, sunrise_ts = s._twilight_anchors(late)
+        # The relevant sunset was on 2026-06-01; sunrise on 2026-06-02.
+        assert sunset_ts < late.timestamp() < sunrise_ts

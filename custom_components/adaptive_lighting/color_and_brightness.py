@@ -327,6 +327,89 @@ class SunLightSettings:
             return self._brightness_pct_tanh(dt)
         return None
 
+    def _twilight_anchors(
+        self,
+        dt_value: datetime.datetime,
+    ) -> tuple[float, float, float, float]:
+        """Return (sunset_ts, civil_dusk_ts, civil_dawn_ts, sunrise_ts) for the
+        night surrounding `dt_value`.
+
+        Three branches attribute `dt_value` to the correct night:
+        1. Pre-sunrise (`dt_value < today_sunrise`): split by the midpoint between
+           yesterday's sunset and today's sunrise (~solar midnight). Before that
+           midpoint → still in last night (yesterday_sunset → today_sunrise).
+           After it → the upcoming night (today_sunset → tomorrow's sunrise).
+        2. Daytime (`today_sunrise <= dt_value < today_sunset`): the upcoming
+           night (today_sunset → tomorrow's sunrise).
+        3. Post-sunset (`dt_value >= today_sunset`): the same night
+           (today_sunset → tomorrow's sunrise).
+        """
+        location = self.astral_location
+        today = dt_value.date()
+        today_sunset = self.sun.sunset(today)
+        today_sunrise = self.sun.sunrise(today)
+
+        if dt_value < today_sunrise:
+            # We're between midnight and today's sunrise. Determine which night we
+            # belong to by comparing to the midpoint between yesterday's sunset and
+            # today's sunrise. Before the midpoint = still in last night; after = tonight.
+            yesterday = today - datetime.timedelta(days=1)
+            yesterday_sunset = self.sun.sunset(yesterday)
+            midpoint = yesterday_sunset + (today_sunrise - yesterday_sunset) / 2
+            if dt_value < midpoint:
+                # Still in last night — return yesterday's sunset → today's sunrise.
+                sunset = yesterday_sunset
+                next_day = today
+                try:
+                    dusk = location.dusk(yesterday)
+                    dawn = location.dawn(next_day)
+                except ValueError:
+                    dusk = sunset
+                    dawn = today_sunrise
+                sunrise = today_sunrise
+            else:
+                # Past midnight midpoint — return tonight.
+                sunset = today_sunset
+                next_day = today + datetime.timedelta(days=1)
+                try:
+                    dusk = location.dusk(today)
+                    dawn = location.dawn(next_day)
+                except ValueError:
+                    dusk = sunset
+                    dawn = self.sun.sunrise(next_day)
+                sunrise = self.sun.sunrise(next_day)
+        elif dt_value < today_sunset:
+            # We're still before sunset today. The "night surrounding dt_value"
+            # is tonight (today_sunset → tomorrow's sunrise).
+            sunset = today_sunset
+            next_day = today + datetime.timedelta(days=1)
+            try:
+                dusk = location.dusk(today)
+                dawn = location.dawn(next_day)
+            except ValueError:
+                # No civil twilight at this latitude/date.
+                dusk = sunset
+                dawn = self.sun.sunrise(next_day)
+            sunrise = self.sun.sunrise(next_day)
+        else:
+            # We're at or past today's sunset. Same night extends to tomorrow's sunrise.
+            sunset = today_sunset
+            next_day = today + datetime.timedelta(days=1)
+            try:
+                dusk = location.dusk(today)
+                dawn = location.dawn(next_day)
+            except ValueError:
+                dusk = sunset
+                dawn = self.sun.sunrise(next_day)
+            sunrise = self.sun.sunrise(next_day)
+
+        return (
+            sunset.timestamp(),
+            dusk.timestamp(),
+            dawn.timestamp(),
+            sunrise.timestamp(),
+        )
+
     def color_temp_kelvin(
         self,
         sun_position: float,
